@@ -1,0 +1,13 @@
+.venv
+__pycache__
+.pytest_cache
+.git
+.env
+data/*.db
+data/*.db-*
+_bmad
+_bmad-output
+.agents
+.claude
+.codex
+.opencode

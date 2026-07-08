@@ -1,0 +1,8 @@
+services:
+  alpha-digest:
+    build: .
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    command: ["--help"]
