@@ -1,0 +1,2 @@
+"""Alpha Digest application package."""
+
