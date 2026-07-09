@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     telegram_ingest_lookback_hours: int = 24
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
+    discord_webhook_url: str | None = None
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

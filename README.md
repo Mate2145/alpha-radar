@@ -4,11 +4,11 @@ Alpha Digest is a self-hosted crypto alpha digest MVP. It ingests RSS now, keeps
 
 ## Architecture
 
-- `app/ingest`: RSS and Telegram ingestion plus Discord stub.
+- `app/ingest`: RSS and Telegram ingestion plus Discord ingestion stub.
 - `app/db`: SQLAlchemy models and table creation.
 - `app/processing`: content hashing, entity extraction, and rule scoring.
 - `app/summarization`: OpenAI-compatible client, prompts, and fallback digest builder.
-- `app/delivery`: Telegram Bot API delivery plus a Discord delivery stub.
+- `app/delivery`: Telegram Bot API delivery, Discord webhook delivery, and broadcast delivery helpers.
 - `app/cli.py`: Typer CLI commands exposed as `alpha`.
 
 ## Setup
@@ -49,6 +49,7 @@ python -m app.main init-db
 - `TELEGRAM_INGEST_LOOKBACK_HOURS`: lookback window for normal Telegram ingestion.
 - `TELEGRAM_BOT_TOKEN`: Telegram bot token for sending the digest.
 - `TELEGRAM_CHAT_ID`: target Alpha Ingest Telegram channel or chat ID.
+- `DISCORD_WEBHOOK_URL`: Discord channel webhook URL for broadcast delivery.
 
 ## LLM Providers
 
@@ -117,7 +118,29 @@ alpha build-window-digest --since-hours 6
 alpha build-window-digest --from 2026-07-08T06:00:00 --to 2026-07-08T12:00:00
 alpha export-digest --date 2026-07-08
 alpha send-digest --date 2026-07-08
+alpha send-digest --date 2026-07-08 --discord-only
+alpha send-digest --date 2026-07-08 --broadcast
+alpha send-window-digest --discord-only
+alpha send-window-digest --broadcast
 alpha smoke-telegram-signal --lookback-hours 24 --expected-signal '$cashchat'
+```
+
+```bash
+python -m app.main init-db
+python -m app.main ingest-rss
+python -m app.main ingest-all
+python -m app.main check-llm
+python -m app.main build-digest --date 2026-07-08
+python -m app.main build-window-digest --since-hours 6
+python -m app.main build-window-digest --from 2026-07-08T06:00:00 --to 2026-07-08T12:00:00
+python -m app.main export-digest --date 2026-07-08
+python -m app.main export-window-digest
+python -m app.main send-digest --date 2026-07-08
+python -m app.main send-digest --date 2026-07-08 --discord-only
+python -m app.main send-digest --date 2026-07-08 --broadcast
+python -m app.main send-window-digest --discord-only
+python -m app.main send-window-digest --broadcast
+python -m app.main smoke-telegram-signal --lookback-hours 24 --expected-signal '$cashchat'
 ```
 
 Recommended daily schedule:
@@ -128,6 +151,8 @@ alpha build-digest --date YYYY-MM-DD
 alpha send-digest --date YYYY-MM-DD
 ```
 
+Use `--discord-only` on `send-digest` or `send-window-digest` to send only to Discord. Use `--broadcast` to send the selected digest to both Telegram and Discord. Without either flag, send commands remain Telegram-only.
+
 For scheduled intraday summaries, build a separate time-window digest without overwriting the daily summary:
 
 ```bash
@@ -136,6 +161,12 @@ alpha build-window-digest --since-hours 6
 ```
 
 Use `--since-hours 2`, `--since-hours 6`, or `--since-hours 12` for rolling scheduled windows, or pass explicit ISO datetimes with `--from` and `--to`.
+
+To always build, export, and broadcast the latest rolling 6-hour digest to Telegram and Discord:
+
+```bash
+scripts/run_6h_broadcast_digest.sh
+```
 
 ## Docker Compose
 
@@ -183,7 +214,7 @@ alpha send-digest --date YYYY-MM-DD
 ## MVP Limitations
 
 - Telegram ingestion uses Telethon user/session credentials to read configured channel history.
-- Discord ingestion and delivery are stubs.
+- Discord ingestion is a stub; Discord delivery is available through webhook configuration.
 - Entity extraction is currently regex/keyword-based, not a full crypto-aware extraction algorithm.
 - Deduplication is based on normalized content hash only.
 - Scoring is rule-based and intentionally simple.
