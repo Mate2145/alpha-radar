@@ -241,6 +241,61 @@ def test_send_digest_command_success(monkeypatch: pytest.MonkeyPatch, capsys) ->
     assert "Sent digest for 2026-07-08 to Telegram" in capsys.readouterr().out
 
 
+def test_send_digest_command_broadcasts(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    summary = SimpleNamespace(summary_date=date(2026, 7, 8), content="# Digest")
+    calls = []
+    monkeypatch.setattr(cli, "init_db", lambda: None)
+    monkeypatch.setattr(cli, "SessionLocal", lambda: FakeSession(summary))
+    monkeypatch.setattr(cli, "send_broadcast_message", lambda content: calls.append(content))
+    cli.send_digest_command("2026-07-08", broadcast=True)
+    assert calls == ["# Digest"]
+    assert "Sent digest for 2026-07-08 to Telegram and Discord" in capsys.readouterr().out
+
+
+def test_send_digest_command_reports_broadcast_partial_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    summary = SimpleNamespace(summary_date=date(2026, 7, 8), content="# Digest")
+
+    def fail(content: str) -> None:
+        _ = content
+        raise RuntimeError("Broadcast delivery failed for discord: webhook rejected")
+
+    monkeypatch.setattr(cli, "init_db", lambda: None)
+    monkeypatch.setattr(cli, "SessionLocal", lambda: FakeSession(summary))
+    monkeypatch.setattr(cli, "send_broadcast_message", fail)
+
+    with pytest.raises(typer.BadParameter, match="discord: webhook rejected"):
+        cli.send_digest_command("2026-07-08", broadcast=True)
+
+
+def test_send_digest_command_sends_discord_only(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys,
+) -> None:
+    summary = SimpleNamespace(summary_date=date(2026, 7, 8), content="# Digest")
+    telegram_calls = []
+    discord_calls = []
+    broadcast_calls = []
+    monkeypatch.setattr(cli, "init_db", lambda: None)
+    monkeypatch.setattr(cli, "SessionLocal", lambda: FakeSession(summary))
+    monkeypatch.setattr(cli, "send_telegram_message", lambda content: telegram_calls.append(content))
+    monkeypatch.setattr(cli, "send_discord_message", lambda content: discord_calls.append(content))
+    monkeypatch.setattr(cli, "send_broadcast_message", lambda content: broadcast_calls.append(content))
+
+    cli.send_digest_command("2026-07-08", discord_only=True)
+
+    assert telegram_calls == []
+    assert discord_calls == ["# Digest"]
+    assert broadcast_calls == []
+    assert "Sent digest for 2026-07-08 to Discord" in capsys.readouterr().out
+
+
+def test_send_digest_command_rejects_conflicting_destinations() -> None:
+    with pytest.raises(typer.BadParameter, match="either --broadcast or --discord-only"):
+        cli.send_digest_command("2026-07-08", broadcast=True, discord_only=True)
+
+
 def test_send_digest_command_requires_existing_summary(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cli, "init_db", lambda: None)
     monkeypatch.setattr(cli, "SessionLocal", lambda: FakeSession(None))
@@ -278,6 +333,75 @@ def test_send_window_digest_command_sends_latest(monkeypatch: pytest.MonkeyPatch
     assert "Sent window digest 2026-07-08T06:00:00 to 2026-07-08T12:00:00" in (
         capsys.readouterr().out
     )
+
+
+def test_send_window_digest_command_broadcasts(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    summary = SimpleNamespace(
+        window_start=datetime(2026, 7, 8, 6),
+        window_end=datetime(2026, 7, 8, 12),
+        content="# Window Digest",
+    )
+    calls = []
+    monkeypatch.setattr(cli, "init_db", lambda: None)
+    monkeypatch.setattr(cli, "SessionLocal", lambda: FakeSession(summary))
+    monkeypatch.setattr(cli, "send_broadcast_message", lambda content: calls.append(content))
+
+    cli.send_window_digest_command(None, None, broadcast=True)
+
+    assert calls == ["# Window Digest"]
+    assert "to Telegram and Discord" in capsys.readouterr().out
+
+
+def test_send_window_digest_command_reports_broadcast_partial_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    summary = SimpleNamespace(
+        window_start=datetime(2026, 7, 8, 6),
+        window_end=datetime(2026, 7, 8, 12),
+        content="# Window Digest",
+    )
+
+    def fail(content: str) -> None:
+        _ = content
+        raise RuntimeError("Broadcast delivery failed for telegram: chat not found")
+
+    monkeypatch.setattr(cli, "init_db", lambda: None)
+    monkeypatch.setattr(cli, "SessionLocal", lambda: FakeSession(summary))
+    monkeypatch.setattr(cli, "send_broadcast_message", fail)
+
+    with pytest.raises(typer.BadParameter, match="telegram: chat not found"):
+        cli.send_window_digest_command(None, None, broadcast=True)
+
+
+def test_send_window_digest_command_sends_discord_only(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys,
+) -> None:
+    summary = SimpleNamespace(
+        window_start=datetime(2026, 7, 8, 6),
+        window_end=datetime(2026, 7, 8, 12),
+        content="# Window Digest",
+    )
+    telegram_calls = []
+    discord_calls = []
+    broadcast_calls = []
+    monkeypatch.setattr(cli, "init_db", lambda: None)
+    monkeypatch.setattr(cli, "SessionLocal", lambda: FakeSession(summary))
+    monkeypatch.setattr(cli, "send_telegram_message", lambda content: telegram_calls.append(content))
+    monkeypatch.setattr(cli, "send_discord_message", lambda content: discord_calls.append(content))
+    monkeypatch.setattr(cli, "send_broadcast_message", lambda content: broadcast_calls.append(content))
+
+    cli.send_window_digest_command(None, None, discord_only=True)
+
+    assert telegram_calls == []
+    assert discord_calls == ["# Window Digest"]
+    assert broadcast_calls == []
+    assert "to Discord" in capsys.readouterr().out
+
+
+def test_send_window_digest_command_rejects_conflicting_destinations() -> None:
+    with pytest.raises(typer.BadParameter, match="either --broadcast or --discord-only"):
+        cli.send_window_digest_command(None, None, broadcast=True, discord_only=True)
 
 
 def test_send_window_digest_command_sends_explicit_window(monkeypatch: pytest.MonkeyPatch) -> None:

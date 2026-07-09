@@ -1,5 +1,6 @@
 import logging
 from datetime import date, datetime, timedelta
+from enum import StrEnum
 from pathlib import Path
 
 import typer
@@ -10,6 +11,8 @@ from app.config import get_settings
 from app.db.database import SessionLocal
 from app.db.migrations import init_db
 from app.db.models import DailySummary, WindowSummary
+from app.delivery.broadcast import send_broadcast_message
+from app.delivery.discord_send import send_discord_message
 from app.delivery.telegram_send import send_telegram_message
 from app.ingest.discord_ingest import ingest_discord
 from app.ingest.rss_ingest import ingest_rss
@@ -23,6 +26,12 @@ configure_logging()
 logger = get_logger(__name__)
 
 app = typer.Typer(help="Alpha Digest CLI")
+
+
+class SendDestination(StrEnum):
+    TELEGRAM = "telegram"
+    DISCORD = "discord"
+    BROADCAST = "broadcast"
 
 
 def parse_summary_date(value: str) -> date:
@@ -115,6 +124,39 @@ def default_window_digest_path(summary: WindowSummary, latest: bool) -> Path:
     start = summary.window_start.strftime("%Y%m%dT%H%M%S")
     end = summary.window_end.strftime("%Y%m%dT%H%M%S")
     return Path("data") / f"window-digest-{start}-{end}.md"
+
+
+def resolve_send_destination(broadcast: bool, discord_only: bool) -> SendDestination:
+    broadcast_enabled = broadcast is True
+    discord_only_enabled = discord_only is True
+    if broadcast_enabled and discord_only_enabled:
+        raise typer.BadParameter("Use either --broadcast or --discord-only, not both.")
+    if broadcast_enabled:
+        return SendDestination.BROADCAST
+    if discord_only_enabled:
+        return SendDestination.DISCORD
+    return SendDestination.TELEGRAM
+
+
+def send_to_destination(markdown: str, destination: SendDestination) -> None:
+    if destination == SendDestination.BROADCAST:
+        send_broadcast_message(markdown)
+    elif destination == SendDestination.DISCORD:
+        send_discord_message(markdown)
+    elif destination == SendDestination.TELEGRAM:
+        send_telegram_message(markdown)
+    else:
+        raise ValueError(f"Unknown send destination: {destination}")
+
+
+def destination_label(destination: SendDestination) -> str:
+    if destination == SendDestination.BROADCAST:
+        return "Telegram and Discord"
+    if destination == SendDestination.DISCORD:
+        return "Discord"
+    if destination == SendDestination.TELEGRAM:
+        return "Telegram"
+    raise ValueError(f"Unknown send destination: {destination}")
 
 
 @app.command("init-db")
@@ -218,7 +260,14 @@ def send_digest_command(
     summary_date_value: str = typer.Option(
         ..., "--date", help="Digest date in YYYY-MM-DD format"
     ),
+    broadcast: bool = typer.Option(
+        False, "--broadcast", help="Send to both Telegram and Discord."
+    ),
+    discord_only: bool = typer.Option(
+        False, "--discord-only", help="Send to Discord only."
+    ),
 ) -> None:
+    destination = resolve_send_destination(broadcast, discord_only)
     summary_date = parse_summary_date(summary_date_value)
     init_db()
     logger.info("Sending digest for %s", summary_date.isoformat())
@@ -229,11 +278,11 @@ def send_digest_command(
             logger.error(message)
             raise typer.BadParameter(message)
         try:
-            send_telegram_message(summary.content)
+            send_to_destination(summary.content, destination)
         except RuntimeError as exc:
             logger.error("Failed to send digest for %s: %s", summary_date.isoformat(), exc)
             raise typer.BadParameter(str(exc)) from exc
-    typer.echo(f"Sent digest for {summary_date.isoformat()} to Telegram.")
+    typer.echo(f"Sent digest for {summary_date.isoformat()} to {destination_label(destination)}.")
     logger.info("Digest sent for %s", summary_date.isoformat())
 
 
@@ -245,21 +294,28 @@ def send_window_digest_command(
     window_end_value: str | None = typer.Option(
         None, "--to", help="Window end as ISO datetime. Omit with --from for latest window."
     ),
+    broadcast: bool = typer.Option(
+        False, "--broadcast", help="Send to both Telegram and Discord."
+    ),
+    discord_only: bool = typer.Option(
+        False, "--discord-only", help="Send to Discord only."
+    ),
 ) -> None:
+    destination = resolve_send_destination(broadcast, discord_only)
     window_bounds = resolve_optional_window_bounds(window_start_value, window_end_value)
     init_db()
     logger.info("Sending window digest")
     with SessionLocal() as session:
         summary = load_window_summary(session, window_bounds)
         try:
-            send_telegram_message(summary.content)
+            send_to_destination(summary.content, destination)
         except RuntimeError as exc:
             logger.error("Failed to send window digest: %s", exc)
             raise typer.BadParameter(str(exc)) from exc
     typer.echo(
         "Sent window digest "
         f"{summary.window_start.isoformat()} to {summary.window_end.isoformat()} "
-        "to Telegram."
+        f"to {destination_label(destination)}."
     )
     logger.info(
         "Window digest sent from %s to %s",
