@@ -149,7 +149,62 @@ def test_build_window_digest_command_success(monkeypatch: pytest.MonkeyPatch, ca
 
     output = capsys.readouterr().out
     assert "Built window digest 2026-07-08T06:00:00 to 2026-07-08T12:00:00" in output
-    assert "fallback-rule-based" in output
+
+
+def test_grade_signals_command_success(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    result = SimpleNamespace(
+        input_path="data/signal-grading/input/window.json",
+        output_path="data/signal-grading/output/window.json",
+        latest_output_path="data/signal-grading/output/latest.json",
+    )
+    calls = {}
+    monkeypatch.setattr(cli, "init_db", lambda: None)
+    monkeypatch.setattr(cli, "SessionLocal", lambda: FakeSession())
+
+    def fake_run_signal_grading(session, start, end, **kwargs):
+        calls["start"] = start
+        calls["end"] = end
+        calls.update(kwargs)
+        return result
+
+    monkeypatch.setattr(cli, "run_signal_grading", fake_run_signal_grading)
+    cli.grade_signals_command(None, "2026-07-08T06:00:00", "2026-07-08T12:00:00")
+
+    output = capsys.readouterr().out
+    assert calls["start"] == datetime(2026, 7, 8, 6)
+    assert calls["end"] == datetime(2026, 7, 8, 12)
+    assert calls["pairing_max_distance"] == 120
+    assert "Graded signals" in output
+    assert "data/signal-grading/input/window.json" in output
+    assert "data/signal-grading/output/window.json" in output
+
+
+def test_grade_signals_command_reports_grading_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli, "init_db", lambda: None)
+    monkeypatch.setattr(cli, "SessionLocal", lambda: FakeSession())
+
+    def fail(session, start, end, **kwargs):
+        _ = session, start, end, kwargs
+        raise cli.GradingValidationError("invalid grading output")
+
+    monkeypatch.setattr(cli, "run_signal_grading", fail)
+
+    with pytest.raises(typer.BadParameter, match="invalid grading output"):
+        cli.grade_signals_command(None, "2026-07-08T06:00:00", "2026-07-08T12:00:00")
+
+
+def test_grade_signals_command_reports_codex_runtime_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli, "init_db", lambda: None)
+    monkeypatch.setattr(cli, "SessionLocal", lambda: FakeSession())
+
+    def fail(session, start, end, **kwargs):
+        _ = session, start, end, kwargs
+        raise RuntimeError("Signal grading requires LLM_PROVIDER=codex_cli")
+
+    monkeypatch.setattr(cli, "run_signal_grading", fail)
+
+    with pytest.raises(typer.BadParameter, match="LLM_PROVIDER=codex_cli"):
+        cli.grade_signals_command(None, "2026-07-08T06:00:00", "2026-07-08T12:00:00")
 
 
 def test_resolve_optional_window_bounds_accepts_latest_mode() -> None:

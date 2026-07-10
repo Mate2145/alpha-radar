@@ -1,6 +1,7 @@
 import pytest
 
 from app.processing.extract_entities import (
+    extract_contract_addresses,
     extract_entities,
     extract_keywords,
     extract_position_signals,
@@ -30,6 +31,27 @@ def test_extract_keywords() -> None:
 
 def test_extract_entities() -> None:
     assert ("ticker", "$SOL") in extract_entities("$SOL listing https://example.com")
+
+
+def test_extract_evm_contract_address() -> None:
+    address = "0x1234567890abcdef1234567890ABCDEF12345678"
+
+    assert extract_contract_addresses(f"CA: {address}") == [address.lower()]
+    assert ("contract_address", address.lower()) in extract_entities(f"$ABC CA {address}")
+
+
+def test_extract_solana_contract_address() -> None:
+    address = "So11111111111111111111111111111111111111112"
+
+    assert extract_contract_addresses(f"SOL token {address}") == [address]
+
+
+def test_extract_contract_addresses_dedupes_and_skips_false_positive() -> None:
+    evm = "0x1234567890abcdef1234567890abcdef12345678"
+    long_base58_id = "So11111111111111111111111111111111111111112"
+    content = f"{evm} again {evm} unrelated id {long_base58_id} short abc123 and ambiguous O0Il"
+
+    assert extract_contract_addresses(content) == [evm]
 
 
 @pytest.mark.parametrize("phrase", ["bullish on", "positive on", "strong on", "supporting"])

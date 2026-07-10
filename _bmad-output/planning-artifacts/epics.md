@@ -3,9 +3,15 @@ stepsCompleted:
   - bmad-help
   - lean-epic-created
   - epic-2-time-window-digest-created
+  - bmad-create-epics-and-stories:step-01-validate-prerequisites
+  - bmad-create-epics-and-stories:step-02-design-epics
+  - bmad-create-epics-and-stories:step-03-create-stories
+  - bmad-create-epics-and-stories:step-04-final-validation
 inputDocuments:
   - AGENTS.md
   - README.md
+  - _bmad-output/planning-artifacts/epics.md
+  - User request: Epic 3 source quality scoring and signal memory
 ---
 
 # alpha-radar - Epic Breakdown
@@ -48,6 +54,20 @@ FR14: Position signals can be rendered in the digest with clear visual markers: 
 
 FR15: Raw high-score messages remain available for audit during the MVP, but the design allows hiding or silencing them later.
 
+FR16: The system can maintain source quality metadata for each configured source, including a simple operator-readable trust or quality score.
+
+FR17: The system can use source quality metadata to influence message scoring and digest ordering without hiding lower-trust source messages from audit output.
+
+FR18: The system can detect repeated token or project signals across multiple messages and sources inside a digest window.
+
+FR19: The system can track signal memory for tokens or projects across prior ingested messages, including first-seen time, latest-seen time, mention count, and source spread.
+
+FR20: The digest can surface signal memory labels such as new, repeated, heating up, or cooling down based on current-window activity compared with prior activity.
+
+FR21: The system can render source quality and signal memory context in the digest in a concise operator-readable format.
+
+FR22: The system can provide a local CLI inspection path for source quality and signal memory calculations.
+
 ### NonFunctional Requirements
 
 NFR1: The smoke test must be runnable locally without requiring production scheduling.
@@ -62,6 +82,16 @@ NFR5: Time-window digest generation must remain runnable locally from the CLI an
 
 NFR6: Position extraction must be testable without live network access and must preserve source-message traceability for every classified signal.
 
+NFR7: Source quality and signal memory behavior must remain SQLite-compatible and runnable in the existing CLI-oriented operating model.
+
+NFR8: Source quality and signal memory calculations must be testable without live network access.
+
+NFR9: Signal memory must preserve source traceability so digest claims can be audited back to source messages.
+
+NFR10: The implementation must not add services, queues, schedulers, agents, orchestration layers, or frontend complexity.
+
+NFR11: Source quality scoring must be transparent and deterministic enough for operators to understand why a source or signal was ranked higher.
+
 ### Additional Requirements
 
 - Use existing project boundaries: `app/ingest`, `app/processing`, `app/summarization`, `app/cli.py`, and `app/db`.
@@ -70,6 +100,9 @@ NFR6: Position extraction must be testable without live network access and must 
 - Keep the result inspectable from the CLI.
 - Keep the first time-window implementation compatible with SQLite and the existing CLI-oriented operating model.
 - Do not remove raw high-score message audit output until a replacement audit/debug path exists.
+- Keep source quality scoring simple and explicit; avoid ML ranking or opaque reputation models for this epic.
+- Treat signal memory as local database-derived state rather than a new external service.
+- Preserve existing digest commands and daily/window behavior while enriching their output.
 
 ### UX Design Requirements
 
@@ -92,11 +125,19 @@ NFR6: Position extraction must be testable without live network access and must 
 - FR13 -> Story 2.3
 - FR14 -> Story 2.3
 - FR15 -> Story 2.2
+- FR16 -> Story 3.1
+- FR17 -> Story 3.1
+- FR18 -> Story 3.3
+- FR19 -> Story 3.2
+- FR20 -> Story 3.3
+- FR21 -> Story 3.3
+- FR22 -> Story 3.5
 
 ## Epic List
 
-1. Epic 1: Telegram Alpha Signal Smoke Test
-2. Epic 2: Time-Window Digest Format and Position Signal Extraction
+1. Epic 1: Telegram Alpha Signal Smoke Test - Validate the first useful end-to-end alpha discovery slice: pull recent Telegram messages and confirm the system can surface a known signal. Covers FR1-FR10.
+2. Epic 2: Time-Window Digest Format and Position Signal Extraction - Make the digest useful for intraday operation by supporting time-window runs, clearer operator-facing formatting, position signals, exports, and broadcast delivery. Covers FR11-FR15.
+3. Epic 3: Source Quality Scoring and Signal Memory - Improve digest usefulness by ranking trusted sources, detecting repeated signals across sources, tracking first-seen/latest-seen tokens or projects, and showing concise signal-memory context in the digest without adding services or frontend complexity. Covers FR16-FR22.
 
 ## Epic 1: Telegram Alpha Signal Smoke Test
 
@@ -263,3 +304,138 @@ So that `Open Positions` shows directional token activity instead of generic opp
 **Given** a message is ambiguous or sarcastic
 **When** the extractor cannot classify the position confidently
 **Then** it does not create a directional position signal and leaves the message available for normal summarization.
+
+## Epic 3: Source Quality Scoring and Signal Memory
+
+Improve digest usefulness by ranking trusted sources, detecting repeated signals across sources, tracking first-seen/latest-seen tokens or projects, and showing concise signal-memory context in the digest without adding services or frontend complexity.
+
+### Story 3.1: Rank Sources With Transparent Quality Scores
+
+As a crypto alpha operator,
+I want each source to have a simple quality score,
+So that digest ranking can favor historically useful or trusted sources without hiding lower-trust material.
+
+**Acceptance Criteria:**
+
+**Given** sources exist in the digest database
+**When** source quality metadata is calculated or loaded
+**Then** each source has an operator-readable quality score or tier
+**And** the score can be inspected without requiring network access.
+
+**Given** messages are scored for digest inclusion
+**When** a message comes from a higher-quality source
+**Then** source quality can increase its ranking contribution in a deterministic way
+**And** the ranking logic remains transparent enough to explain from local data.
+
+**Given** a message comes from a lower-quality source
+**When** a digest is built
+**Then** the message is not silently discarded solely because of source quality
+**And** it remains eligible for raw audit output when otherwise selected.
+
+**Given** source quality inputs are absent or incomplete
+**When** scoring runs
+**Then** the system uses a documented neutral default
+**And** existing digest generation continues to work.
+
+### Story 3.2: Track Signal Memory Across Ingested Messages
+
+As a crypto alpha operator,
+I want the system to remember when tokens or projects were first and last seen,
+So that I can tell whether a signal is new, repeated, or stale.
+
+**Acceptance Criteria:**
+
+**Given** ingested messages contain token or project entities
+**When** signal memory is calculated
+**Then** the system records or derives first-seen time, latest-seen time, total mention count, and source spread for each signal.
+
+**Given** a signal appears in multiple historical messages
+**When** memory is inspected
+**Then** the system reports the earliest and latest observed message timestamps
+**And** includes enough source/message identifiers to audit the calculation.
+
+**Given** no prior messages exist for a token or project
+**When** it appears in the current digest window
+**Then** the signal can be classified as newly seen.
+
+**Given** signal memory tests run locally
+**When** test data is provided without live integrations
+**Then** first-seen, latest-seen, mention count, and source spread behavior can be verified deterministically.
+
+### Story 3.3: Detect Repeated Signals Across Sources
+
+As a crypto alpha operator,
+I want repeated token or project signals across multiple sources to be detected,
+So that cross-source confirmation stands out in the digest.
+
+**Acceptance Criteria:**
+
+**Given** the same token or project appears in multiple messages inside a digest window
+**When** repeated signal detection runs
+**Then** the system groups those mentions into a repeated signal candidate.
+
+**Given** repeated mentions come from distinct sources
+**When** the repeated signal is scored
+**Then** the system records the distinct source count
+**And** the signal can be ranked above equivalent single-source mentions.
+
+**Given** duplicate or near-identical content is ingested more than once
+**When** repeated signal detection runs
+**Then** duplicate content does not falsely inflate source spread or mention strength.
+
+**Given** a repeated signal is detected
+**When** digest context is prepared
+**Then** the system preserves representative evidence from source messages for auditability.
+
+### Story 3.4: Render Source Quality and Signal Memory in Digests
+
+As a crypto alpha operator,
+I want digest sections to show source quality and signal memory context concisely,
+So that I can scan why a signal matters without reading raw messages first.
+
+**Acceptance Criteria:**
+
+**Given** a digest is built from messages with signal memory context
+**When** the digest is rendered
+**Then** token or project entries can include concise labels such as new, repeated, heating up, or cooling down.
+
+**Given** a signal has prior history
+**When** it appears in the digest
+**Then** the rendered context includes first-seen or latest-seen information where useful
+**And** does not overwhelm the existing operator-readable format.
+
+**Given** a signal appears across multiple sources
+**When** it is rendered in repeated signal sections
+**Then** the digest shows source spread or source count in concise language.
+
+**Given** the existing daily and window digest commands are used
+**When** source quality and signal memory data are available
+**Then** the enriched digest output remains compatible with both command paths.
+
+**Given** raw audit output is enabled
+**When** enriched digest context is rendered
+**Then** source messages remain available for manual verification.
+
+### Story 3.5: Inspect Source Quality and Signal Memory From the CLI
+
+As a crypto alpha operator,
+I want a local CLI inspection command for source quality and signal memory,
+So that I can debug digest ranking and memory calculations without sending a digest.
+
+**Acceptance Criteria:**
+
+**Given** the operator runs a local inspection command
+**When** source quality data exists
+**Then** the command displays source identifiers, quality scores or tiers, and the basis used by the local calculation.
+
+**Given** the operator requests memory for a token or project
+**When** matching messages exist
+**Then** the command displays first-seen time, latest-seen time, mention count, source spread, and representative source references.
+
+**Given** no matching source quality or signal memory data exists
+**When** the inspection command runs
+**Then** the command reports a clear empty state instead of failing ambiguously.
+
+**Given** the inspection command is executed locally
+**When** it reads from the configured database
+**Then** it does not require live Telegram, Discord, RSS, or LLM access.

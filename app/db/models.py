@@ -17,6 +17,7 @@ class EntityType(str, Enum):
     ticker = "ticker"
     url = "url"
     keyword = "keyword"
+    contract_address = "contract_address"
 
 
 class Source(Base):
