@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cd "1000 4 24 27 30 46 100 1000 1001dirname "-e")/.."
+cd "$(dirname "$0")/.."
 
 # Load venv
 source .venv/bin/activate
