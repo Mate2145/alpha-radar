@@ -4,7 +4,7 @@ baseline_commit: 1a93b7045a34165ae3dd01ee861aab58b1cfa41b
 
 # Story 3.1: Codex CLI Signal Grading Pipeline
 
-Status: review
+Status: done
 
 ## Story
 
@@ -288,3 +288,4 @@ GPT-5 Codex
 ## Change Log
 
 - 2026-07-10: Implemented Codex CLI signal grading pipeline story and moved status to review.
+- 2026-07-16: Marked story done after review and full-suite validation passed.
