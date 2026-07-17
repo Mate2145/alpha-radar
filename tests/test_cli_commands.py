@@ -4,11 +4,13 @@ from types import SimpleNamespace
 import pytest
 import typer
 from sqlalchemy import create_engine
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app import cli
 from app.db.database import Base
-from app.db.models import WindowSummary
+from app.db.models import EntityType, ExtractedEntity, Message, Source, SourceType, WindowSummary
+from app.summarization import digest_builder
 
 
 class FakeSession:
@@ -84,6 +86,34 @@ def test_build_digest_command_success(monkeypatch: pytest.MonkeyPatch, capsys) -
     assert "Built digest for 2026-07-08 using codex" in capsys.readouterr().out
 
 
+def test_build_digest_command_remains_compatible_with_enriched_digest_builder(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys,
+) -> None:
+    calls = {}
+    summary = SimpleNamespace(
+        summary_date=date(2026, 7, 8),
+        content="digest with Grade A context",
+        model="fallback-rule-based",
+    )
+    monkeypatch.setattr(cli, "init_db", lambda: None)
+    monkeypatch.setattr(cli, "SessionLocal", lambda: FakeSession())
+    monkeypatch.setattr(cli, "apply_cross_source_bonus", lambda session, d: calls.update(date=d))
+
+    def fake_build_digest(session, d):
+        calls["session"] = session
+        calls["build_date"] = d
+        return summary
+
+    monkeypatch.setattr(cli, "build_digest", fake_build_digest)
+
+    cli.build_digest_command("2026-07-08")
+
+    assert calls["date"] == date(2026, 7, 8)
+    assert calls["build_date"] == date(2026, 7, 8)
+    assert "Built digest for 2026-07-08 using fallback-rule-based" in capsys.readouterr().out
+
+
 def test_build_digest_command_reports_runtime_error(monkeypatch: pytest.MonkeyPatch) -> None:
     def fail(session, d):
         raise RuntimeError("LLM failed")
@@ -149,6 +179,124 @@ def test_build_window_digest_command_success(monkeypatch: pytest.MonkeyPatch, ca
 
     output = capsys.readouterr().out
     assert "Built window digest 2026-07-08T06:00:00 to 2026-07-08T12:00:00" in output
+
+
+def test_build_window_digest_command_remains_compatible_with_enriched_digest_builder(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys,
+) -> None:
+    calls = {}
+    summary = SimpleNamespace(
+        window_start=datetime(2026, 7, 8, 6),
+        window_end=datetime(2026, 7, 8, 12),
+        content="window digest with Grade A context",
+        model="fallback-rule-based",
+    )
+    monkeypatch.setattr(cli, "init_db", lambda: None)
+    monkeypatch.setattr(cli, "SessionLocal", lambda: FakeSession())
+
+    def fake_apply_bonus(session, start, end):
+        calls["bonus_start"] = start
+        calls["bonus_end"] = end
+
+    def fake_build_window_digest(session, start, end):
+        calls["build_start"] = start
+        calls["build_end"] = end
+        return summary
+
+    monkeypatch.setattr(cli, "apply_cross_source_bonus_for_window", fake_apply_bonus)
+    monkeypatch.setattr(cli, "build_window_digest", fake_build_window_digest)
+
+    cli.build_window_digest_command(None, "2026-07-08T06:00:00", "2026-07-08T12:00:00")
+
+    assert calls["bonus_start"] == datetime(2026, 7, 8, 6)
+    assert calls["bonus_end"] == datetime(2026, 7, 8, 12)
+    assert calls["build_start"] == datetime(2026, 7, 8, 6)
+    assert calls["build_end"] == datetime(2026, 7, 8, 12)
+    output = capsys.readouterr().out
+    assert "Built window digest 2026-07-08T06:00:00 to 2026-07-08T12:00:00" in output
+
+
+def test_build_window_digest_command_uses_real_builder_with_enriched_content(
+    monkeypatch: pytest.MonkeyPatch,
+    db_session: Session,
+    capsys,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("LLM_PROVIDER", "fallback")
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+    source = Source(name="@alpha", type=SourceType.telegram.value, identifier="@alpha")
+    db_session.add(source)
+    db_session.commit()
+    message = Message(
+        source_id=source.id,
+        external_id="42",
+        content="$CASHCHAT listing repeated",
+        created_at=datetime(2026, 7, 8, 6, 30),
+        content_hash="cli-real-builder",
+        score=9,
+    )
+    message.entities.append(
+        ExtractedEntity(entity_type=EntityType.ticker.value, value="$CASHCHAT")
+    )
+    db_session.add(message)
+    db_session.commit()
+    output_dir = tmp_path / "output"
+    output_dir.mkdir(parents=True)
+    output_dir.joinpath("latest.json").write_text(
+        """{
+  "schema_version": "1.1",
+  "window": {"start": "2026-07-08T06:00:00", "end": "2026-07-08T12:00:00"},
+  "grades": [{
+    "signal_type": "ticker",
+    "signal_key": "$CASHCHAT",
+    "aliases": [],
+    "chain": "unknown",
+    "labels": ["repeated", "cross-source"],
+    "first_seen": "2026-07-08T06:30:00",
+    "latest_seen": "2026-07-08T06:30:00",
+    "mention_count": 1,
+    "source_count": 1,
+    "vip_source_count": 0,
+    "source_message_ids": ["db:1"],
+    "grade": "A",
+    "confidence": 0.9,
+    "priority": "high",
+    "summary": "CLI command consumed matching grading output.",
+    "reasoning": ["High score."],
+    "risk_flags": [],
+    "recommended_action": "review"
+  }]
+}""",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(cli, "init_db", lambda: None)
+    monkeypatch.setattr(cli, "SessionLocal", lambda: db_session)
+    monkeypatch.setattr(cli, "apply_cross_source_bonus_for_window", lambda session, start, end: None)
+
+    def real_builder_with_tmp_grading(session, start, end):
+        return digest_builder.build_window_digest(
+            session,
+            start,
+            end,
+            grading_base_dir=tmp_path,
+        )
+
+    monkeypatch.setattr(cli, "build_window_digest", real_builder_with_tmp_grading)
+
+    cli.build_window_digest_command(None, "2026-07-08T06:00:00", "2026-07-08T12:00:00")
+
+    summary = db_session.scalar(select(WindowSummary))
+    assert summary is not None
+    assert "## Open Signals" in summary.content
+    assert "## Repeated Signals Across Sources" not in summary.content
+    assert "$CASHCHAT — 🟢 LONG/WATCH — Grade A / high / 0.90" in summary.content
+    assert "CLI command consumed matching grading output. Flags: 🔁, 🔗." in summary.content
+    assert "$CASHCHAT listing repeated" in summary.content
+    assert "using fallback-rule-based" in capsys.readouterr().out
 
 
 def test_grade_signals_command_success(monkeypatch: pytest.MonkeyPatch, capsys) -> None:

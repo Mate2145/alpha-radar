@@ -10,12 +10,15 @@ from app.db.database import Base
 from app.db.models import EntityType, ExtractedEntity, Message, Source, SourceType
 from app.processing.signal_grading import (
     GradingValidationError,
+    SCHEMA_VERSION,
     build_grading_input,
     build_signal_candidates,
     default_codex_runner,
+    grading_system_prompt,
     run_signal_grading,
     validate_grading_input,
     validate_grading_output,
+    validate_grading_output_against_input,
     window_filename,
 )
 
@@ -149,13 +152,57 @@ def test_build_grading_input_contains_raw_messages_and_signals(session: Session)
 
     validate_grading_input(payload)
     assert payload["task"] == "grade_crypto_signals"
+    assert payload["provenance"]["candidate_builder"] == "signal_grading.v1"
+    assert payload["provenance"]["memory_source"] == "derived_from_messages_and_extracted_entities"
+    assert payload["provenance"]["generated_at"]
     assert payload["signals"][0]["signal_key"] == "$ABC"
     assert payload["raw_messages"][0]["id"] == f"db:{message.id}"
 
 
+def test_build_grading_input_enriches_candidates_from_signal_memory(session: Session) -> None:
+    first_source = Source(name="@early", type=SourceType.telegram.value, identifier="@early")
+    latest_source = Source(name="@alpha", type=SourceType.telegram.value, identifier="@alpha")
+    session.add_all([first_source, latest_source])
+    session.commit()
+    first = add_message(
+        session,
+        source=first_source,
+        content="$ABC first seen",
+        created_at=datetime(2026, 7, 7, 7),
+        score=4.0,
+        content_hash="memory-first",
+        entities=[(EntityType.ticker.value, "$ABC")],
+    )
+    latest = add_message(
+        session,
+        source=latest_source,
+        content="$ABC current mention",
+        created_at=datetime(2026, 7, 8, 7),
+        score=8.0,
+        content_hash="memory-latest",
+        entities=[(EntityType.ticker.value, "$ABC")],
+    )
+
+    payload = build_grading_input(
+        session,
+        datetime(2026, 7, 8, 6),
+        datetime(2026, 7, 8, 12),
+        pairing_max_distance=120,
+    )
+
+    signal = payload["signals"][0]
+    assert signal["signal_key"] == "$ABC"
+    assert signal["first_seen"] == first.created_at.isoformat()
+    assert signal["latest_seen"] == latest.created_at.isoformat()
+    assert signal["mention_count"] == 2
+    assert signal["source_count"] == 2
+    assert signal["source_message_ids"] == [f"db:{first.id}", f"db:{latest.id}"]
+    assert "new" not in signal["labels"]
+
+
 def test_validate_grading_output_rejects_bad_confidence() -> None:
     payload = {
-        "schema_version": "1.0",
+        "schema_version": SCHEMA_VERSION,
         "window": {"start": "2026-07-08T06:00:00", "end": "2026-07-08T12:00:00"},
         "grades": [
             {
@@ -163,6 +210,12 @@ def test_validate_grading_output_rejects_bad_confidence() -> None:
                 "signal_key": "$ABC",
                 "aliases": [],
                 "chain": "unknown",
+                "labels": [],
+                "first_seen": "2026-07-08T07:00:00",
+                "latest_seen": "2026-07-08T07:00:00",
+                "mention_count": 1,
+                "source_count": 1,
+                "vip_source_count": 0,
                 "source_message_ids": ["db:1"],
                 "grade": "A",
                 "confidence": 1.5,
@@ -195,17 +248,72 @@ def test_validate_grading_output_rejects_non_string_list_items() -> None:
         validate_grading_output(payload)
 
 
+def test_validate_grading_output_requires_echoed_signal_context() -> None:
+    payload = valid_output_payload()
+    del payload["grades"][0]["first_seen"]
+
+    with pytest.raises(GradingValidationError, match="first_seen"):
+        validate_grading_output(payload)
+
+
 def test_validate_grading_input_rejects_malformed_signal() -> None:
     payload = {
-        "schema_version": "1.0",
+        "schema_version": SCHEMA_VERSION,
         "task": "grade_crypto_signals",
         "window": {"start": "2026-07-08T06:00:00", "end": "2026-07-08T12:00:00"},
+        "provenance": {
+            "candidate_builder": "signal_grading.v1",
+            "memory_source": "derived_from_messages_and_extracted_entities",
+            "generated_at": "2026-07-08T12:00:00",
+        },
         "signals": [{"signal_type": "ticker"}],
         "raw_messages": [],
     }
 
     with pytest.raises(GradingValidationError, match="signal_key"):
         validate_grading_input(payload)
+
+
+def test_validate_grading_output_against_input_allows_omitted_candidates() -> None:
+    input_payload = valid_input_payload()
+    second_signal = dict(input_payload["signals"][0])
+    second_signal["signal_key"] = "$DEF"
+    second_signal["source_message_ids"] = ["db:2"]
+    input_payload["signals"].append(second_signal)
+    output_payload = valid_output_payload()
+    output_payload["grades"][0].update(input_payload["signals"][0])
+
+    validate_grading_output_against_input(output_payload, input_payload)
+
+
+def test_validate_grading_output_against_input_allows_ignore_grade() -> None:
+    input_payload = valid_input_payload()
+    output_payload = valid_output_payload()
+    output_payload["grades"][0].update(input_payload["signals"][0])
+    output_payload["grades"][0]["grade"] = "ignore"
+    output_payload["grades"][0]["priority"] = "ignore"
+    output_payload["grades"][0]["recommended_action"] = "ignore"
+
+    validate_grading_output_against_input(output_payload, input_payload)
+
+
+def test_validate_grading_output_against_input_rejects_extra_grade() -> None:
+    input_payload = valid_input_payload()
+    output_payload = valid_output_payload()
+    output_payload["grades"][0]["signal_key"] = "$EXTRA"
+
+    with pytest.raises(GradingValidationError, match="does not match an input signal"):
+        validate_grading_output_against_input(output_payload, input_payload)
+
+
+def test_validate_grading_output_against_input_rejects_mutated_evidence() -> None:
+    input_payload = valid_input_payload()
+    output_payload = valid_output_payload()
+    output_payload["grades"][0].update(input_payload["signals"][0])
+    output_payload["grades"][0]["source_message_ids"] = ["db:99"]
+
+    with pytest.raises(GradingValidationError, match="source_message_ids"):
+        validate_grading_output_against_input(output_payload, input_payload)
 
 
 def test_run_signal_grading_preserves_latest_when_output_invalid(
@@ -232,7 +340,7 @@ def test_run_signal_grading_preserves_latest_when_output_invalid(
         _ = system_prompt
         output_path = user_prompt.rsplit("Output file:", 1)[1].strip()
         with open(output_path, "w", encoding="utf-8") as file:
-            json.dump({"schema_version": "1.0", "window": {}, "grades": "bad"}, file)
+            json.dump({"schema_version": SCHEMA_VERSION, "window": {}, "grades": "bad"}, file)
         return "done"
 
     with pytest.raises(GradingValidationError):
@@ -309,7 +417,7 @@ def test_run_signal_grading_updates_latest_for_valid_output(session: Session, tm
         with open(output_path, "w", encoding="utf-8") as file:
             json.dump(
                 {
-                    "schema_version": "1.0",
+                    "schema_version": SCHEMA_VERSION,
                     "window": {
                         "start": "2026-07-08T06:00:00",
                         "end": "2026-07-08T12:00:00",
@@ -320,6 +428,12 @@ def test_run_signal_grading_updates_latest_for_valid_output(session: Session, tm
                             "signal_key": "$ABC",
                             "aliases": [],
                             "chain": "unknown",
+                            "labels": ["new"],
+                            "first_seen": "2026-07-08T07:00:00",
+                            "latest_seen": "2026-07-08T07:00:00",
+                            "mention_count": 1,
+                            "source_count": 1,
+                            "vip_source_count": 0,
                             "source_message_ids": [f"db:{message.id}"],
                             "grade": "A",
                             "confidence": 0.8,
@@ -421,6 +535,48 @@ def test_build_grading_input_uses_previous_window_for_heating_label(session: Ses
     assert "heating up" in payload["signals"][0]["labels"]
 
 
+def test_build_grading_input_uses_previous_window_for_cooling_label(session: Session) -> None:
+    source = Source(name="@alpha", type=SourceType.telegram.value, identifier="@alpha")
+    session.add(source)
+    session.commit()
+    add_message(
+        session,
+        source=source,
+        content="$ABC previous one",
+        created_at=datetime(2026, 7, 8, 1),
+        score=4.0,
+        content_hash="cooling-previous-one",
+        entities=[(EntityType.ticker.value, "$ABC")],
+    )
+    add_message(
+        session,
+        source=source,
+        content="$ABC previous two",
+        created_at=datetime(2026, 7, 8, 2),
+        score=4.0,
+        content_hash="cooling-previous-two",
+        entities=[(EntityType.ticker.value, "$ABC")],
+    )
+    add_message(
+        session,
+        source=source,
+        content="$ABC current",
+        created_at=datetime(2026, 7, 8, 7),
+        score=8.0,
+        content_hash="cooling-current",
+        entities=[(EntityType.ticker.value, "$ABC")],
+    )
+
+    payload = build_grading_input(
+        session,
+        datetime(2026, 7, 8, 6),
+        datetime(2026, 7, 8, 12),
+        pairing_max_distance=120,
+    )
+
+    assert "cooling down" in payload["signals"][0]["labels"]
+
+
 def test_ambiguous_one_ticker_two_contracts_does_not_pair_alias(session: Session) -> None:
     source = Source(name="@alpha", type=SourceType.telegram.value, identifier="@alpha")
     session.add(source)
@@ -468,10 +624,17 @@ def test_default_codex_runner_requires_codex_provider(monkeypatch: pytest.Monkey
         default_codex_runner("system", "user")
 
 
+def test_grading_prompt_does_not_filter_equity_style_tickers() -> None:
+    prompt = grading_system_prompt()
+
+    assert "Do not ignore a ticker only because it looks like an equity" in prompt
+    assert "crypto, token, equity, macro" in prompt
+
+
 def test_validate_grading_output_accepts_minimal_valid_payload() -> None:
     validate_grading_output(
         {
-            "schema_version": "1.0",
+            "schema_version": SCHEMA_VERSION,
             "window": {
                 "start": "2026-07-08T06:00:00",
                 "end": "2026-07-08T12:00:00",
@@ -483,7 +646,7 @@ def test_validate_grading_output_accepts_minimal_valid_payload() -> None:
 
 def valid_output_payload() -> dict:
     return {
-        "schema_version": "1.0",
+        "schema_version": SCHEMA_VERSION,
         "window": {
             "start": "2026-07-08T06:00:00",
             "end": "2026-07-08T12:00:00",
@@ -494,6 +657,12 @@ def valid_output_payload() -> dict:
                 "signal_key": "$ABC",
                 "aliases": [],
                 "chain": "unknown",
+                "labels": [],
+                "first_seen": "2026-07-08T07:00:00",
+                "latest_seen": "2026-07-08T07:00:00",
+                "mention_count": 1,
+                "source_count": 1,
+                "vip_source_count": 0,
                 "source_message_ids": ["db:1"],
                 "grade": "A",
                 "confidence": 0.8,
@@ -502,6 +671,47 @@ def valid_output_payload() -> dict:
                 "reasoning": ["High score."],
                 "risk_flags": [],
                 "recommended_action": "review",
+            }
+        ],
+    }
+
+
+def valid_input_payload() -> dict:
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "task": "grade_crypto_signals",
+        "window": {
+            "start": "2026-07-08T06:00:00",
+            "end": "2026-07-08T12:00:00",
+        },
+        "provenance": {
+            "candidate_builder": "signal_grading.v1",
+            "memory_source": "derived_from_messages_and_extracted_entities",
+            "generated_at": "2026-07-08T12:00:00",
+        },
+        "signals": [
+            {
+                "signal_type": "ticker",
+                "signal_key": "$ABC",
+                "aliases": [],
+                "chain": "unknown",
+                "labels": [],
+                "first_seen": "2026-07-08T07:00:00",
+                "latest_seen": "2026-07-08T07:00:00",
+                "mention_count": 1,
+                "source_count": 1,
+                "vip_source_count": 0,
+                "source_message_ids": ["db:1"],
+            }
+        ],
+        "raw_messages": [
+            {
+                "id": "db:1",
+                "created_at": "2026-07-08T07:00:00",
+                "source": "@alpha",
+                "source_tier": "default",
+                "score": 8.0,
+                "content": "$ABC launch",
             }
         ],
     }

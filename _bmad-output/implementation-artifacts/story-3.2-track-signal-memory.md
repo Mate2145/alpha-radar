@@ -57,11 +57,17 @@ so that I can tell whether a signal is new, repeated, or stale.
 
 ## Dev Notes
 
+### Epic 3 Dependency Direction
+
+- Story 3.1 is the foundation for Epic 3. Signal memory exists primarily to enrich the Story 3.1 Codex grading input contract, not to create an independent digest-rendering path.
+- Story 3.4 should render memory fields through validated grading output when available. It should not bypass the grading layer by treating `SignalMemory` as the primary digest presentation contract.
+- The deterministic memory module remains useful as the local, testable source of first-seen/latest-seen, mention-count, source-count, and label data that grading candidates can consume.
+
 ### Scope Boundaries
 
 - This story creates the deterministic memory calculation layer only.
 - Do not add CLI inspection; Story 3.5 owns local inspection commands.
-- Do not render digest labels; Story 3.4 owns digest rendering.
+- Do not render digest labels; Story 3.4 owns digest rendering from validated grading output.
 - Do not add source-quality YAML or trusted-source tiers.
 - Do not call Telegram, Discord, RSS, OpenAI, OpenRouter, Codex CLI, or any networked integration.
 - Do not run `codex` CLI commands in this repository.
@@ -108,7 +114,7 @@ so that I can tell whether a signal is new, repeated, or stale.
 
 ### Previous Story Intelligence
 
-- Story 3.1 is currently in `review` and established the signal-grading input contract.
+- Story 3.1 is done and established the signal-grading input contract.
 - Reuse the same audit identifier convention (`db:{message.id}`) and allowed signal types (`ticker`, `contract_address`) to avoid two incompatible signal vocabularies.
 - Do not duplicate large parts of `signal_grading.py`; factor only if a small shared helper is clearly worth it. A small local chain classifier is acceptable if it keeps this story isolated.
 - Existing grading tests show the preferred pattern for adding in-memory SQLite fixtures and helper `add_message` functions.
@@ -154,3 +160,4 @@ GPT-5 Codex
 - 2026-07-14: Created Story 3.2 artifact, implemented signal memory processing, added tests, and moved story to review after passing validation.
 - 2026-07-14: Addressed code-review findings for explicit dataclass construction, alias derivation, and source auditability.
 - 2026-07-16: Marked story done after review and full-suite validation passed.
+- 2026-07-16: Clarified Epic 3 dependency direction: Story 3.2 memory feeds the Story 3.1 grading contract, and Story 3.4 should render memory through validated grading output.

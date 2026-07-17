@@ -74,10 +74,16 @@ so that cross-source confirmation stands out in the digest.
 
 ## Dev Notes
 
+### Epic 3 Dependency Direction
+
+- Story 3.1 is the foundation for Epic 3. Repeated-signal detection exists primarily to enrich the Story 3.1 Codex grading input contract, not to create an independent digest-rendering path.
+- Story 3.4 should render repeated/cross-source context through validated grading output when available. It should not treat `RepeatedSignal` as the primary digest presentation contract unless the grading output is absent and a deliberate fallback is implemented.
+- The deterministic repeated-signal module remains useful as the local, testable source of repeated/cross-source labels, source spread, score, evidence, and audit message IDs that grading candidates can consume.
+
 ### Scope Boundaries
 
 - This story creates a standalone repeated-signal detection layer only.
-- Do not render repeated signals into digest Markdown; Story 3.4 owns digest presentation.
+- Do not render repeated signals into digest Markdown; Story 3.4 owns digest presentation from validated grading output.
 - Do not add a CLI inspection command; Story 3.5 owns local inspection commands.
 - Do not modify Codex grading invocation unless a very small reuse point is needed and tests prove no regression.
 - Do not use `keyword` entities as project identities. Current keyword extraction is topic-oriented and too broad for repeated token/project grouping.
@@ -151,7 +157,7 @@ so that cross-source confirmation stands out in the digest.
 
 - Story 3.2 is done and established the local signal memory layer. Reuse its normalization helpers rather than recreating ticker/contract key logic.
 - Story 3.2 explicitly kept digest rendering, CLI inspection, and new persistence out of scope; keep the same boundary for this story.
-- Story 3.1 is done and established the grading input contract. Its candidate builder currently has repeated/cross-source labels and previous-window labels, but 3.3 should not be folded into the Codex grading pipeline yet. Build the standalone module first so 3.4 can consume it cleanly.
+- Story 3.1 is done and established the grading input contract. Future integration work should make 3.3 repeated/cross-source outputs feed that contract before they appear in digests.
 - Recent review fixes in Story 3.1 tightened ambiguity handling and schema validation. Keep this story deterministic and explicit; avoid loose "best effort" grouping that cannot be tested.
 
 ### Git Intelligence
@@ -180,6 +186,7 @@ so that cross-source confirmation stands out in the digest.
 
 - Should Story 3.4 consume `RepeatedSignal` directly in digest rendering, or should it first adapt repeated signals into the existing grading input shape?
 - Should bounded `Source.quality_score` affect repeated-signal ranking in this story, or should source quality remain display/context only until digest rendering?
+- Resolution direction as of 2026-07-16: Story 3.4 should consume validated Story 3.1 grading output first. Repeated-signal data should flow into grading candidates before digest rendering, with any direct `RepeatedSignal` rendering treated only as an explicit fallback.
 
 ## Dev Agent Record
 
@@ -211,3 +218,4 @@ GPT-5 Codex
 - 2026-07-16: Created Story 3.3 as a standalone repeated-signal detection story and set status to ready-for-dev.
 - 2026-07-16: Implemented repeated-signal detection, added offline tests, validated full suite, and moved story to review.
 - 2026-07-16: Addressed review finding for direct detection window filtering and reran targeted/full validation.
+- 2026-07-16: Clarified Epic 3 dependency direction: Story 3.3 repeated-signal output feeds the Story 3.1 grading contract, and Story 3.4 should render repeated/cross-source context through validated grading output.

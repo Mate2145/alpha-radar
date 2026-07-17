@@ -361,6 +361,7 @@ Guardrails:
 - Validate input schema before calling Codex.
 - Validate output schema before accepting Codex results.
 - Limit raw messages, signal candidates, and message content length.
+- Do not use a crypto-only filter. Equity-style or non-crypto-looking tickers remain eligible market alpha candidates and should be graded by catalyst quality, relevance, source support, and actionability in the provided evidence.
 - Add retention later if file growth becomes a problem.
 
 Proposed limits:

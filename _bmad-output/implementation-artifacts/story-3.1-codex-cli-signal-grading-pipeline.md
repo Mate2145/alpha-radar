@@ -96,6 +96,7 @@ so that I can iterate on AI-assisted signal grading without destabilizing digest
 - Do not add services, schedulers, queues, agents, orchestration layers, or frontend surfaces.
 - Existing digest build/export/send commands must remain usable without grading.
 - Do not run `codex` CLI commands manually from the agent workflow. Implementation tests must mock subprocess behavior.
+- Do not treat equity-style or non-crypto-looking tickers as automatic `ignore` candidates. Grade market alpha candidates by catalyst quality, relevance, source support, and actionability in the provided evidence.
 
 ### Current Codebase Facts
 
@@ -114,11 +115,16 @@ Write input JSON like:
 
 ```json
 {
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "task": "grade_crypto_signals",
   "window": {
     "start": "2026-07-10T12:00:00",
     "end": "2026-07-10T18:00:00"
+  },
+  "provenance": {
+    "candidate_builder": "signal_grading.v1",
+    "memory_source": "derived_from_messages_and_extracted_entities",
+    "generated_at": "2026-07-10T18:00:00"
   },
   "signals": [
     {
@@ -150,13 +156,15 @@ Write input JSON like:
 
 For this story, `vip_source_count` and `source_tier` may use neutral/default values if trusted source YAML is not implemented yet. If trusted source config is implemented in this story, keep it small and file-based as described in `docs/epic-3-grading-decisions.md`.
 
+The grading input JSON is the frozen source-of-evidence. Story 3.2 signal memory and Story 3.3 repeated/cross-source detection should feed this contract before digest rendering depends on those fields.
+
 ### Grading Output Contract
 
 Valid Codex output JSON:
 
 ```json
 {
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "window": {
     "start": "2026-07-10T12:00:00",
     "end": "2026-07-10T18:00:00"
@@ -167,7 +175,13 @@ Valid Codex output JSON:
       "signal_key": "0x1234567890abcdef1234567890abcdef12345678",
       "aliases": ["$ABC"],
       "chain": "evm",
-      "source_message_ids": ["db:123"],
+      "labels": ["new", "repeated", "cross-source"],
+      "first_seen": "2026-07-10T12:15:00",
+      "latest_seen": "2026-07-10T17:45:00",
+      "mention_count": 4,
+      "source_count": 2,
+      "vip_source_count": 0,
+      "source_message_ids": ["db:123", "db:124"],
       "grade": "A",
       "confidence": 0.86,
       "priority": "high",
@@ -180,6 +194,10 @@ Valid Codex output JSON:
 }
 ```
 
+The grading output JSON is the source-of-judgment for later digest rendering. Codex may omit input candidates, and may emit `grade: "ignore"` for candidates it wants to suppress. Every emitted grade must map to exactly one input signal by `(signal_type, signal_key)`. Extra output grades are invalid. The echoed evidence fields must match parsed input values field-by-field with exact list order: `signal_type`, `signal_key`, `aliases`, `chain`, `labels`, `first_seen`, `latest_seen`, `mention_count`, `source_count`, `vip_source_count`, and `source_message_ids`. Codex authors only judgment fields: `grade`, `confidence`, `priority`, `summary`, `reasoning`, `risk_flags`, and `recommended_action`.
+
+Validation should remain layered: keep schema-only output validation reusable, and add input-aware validation for the source-of-evidence contract wherever the matching input packet is available.
+
 Allowed values:
 
 - `signal_type`: `ticker`, `contract_address`
@@ -187,6 +205,8 @@ Allowed values:
 - `grade`: `A`, `B`, `C`, `D`, `ignore`
 - `priority`: `high`, `medium`, `low`, `ignore`
 - `recommended_action`: `review`, `watch`, `ignore`
+
+Schema `1.1` is required for this stricter contract. Legacy schema `1.0` output should not be treated as equivalent to `1.1` because it did not require echoed memory context or input-aware evidence matching.
 
 ### File Layout
 
@@ -222,6 +242,8 @@ data/signal-grading/
   - schema validation failures;
   - valid output updating `output/latest.json`;
   - invalid output going to `invalid/` while preserving prior latest output;
+  - input-aware output validation rejecting extra grades and mutated echoed evidence fields;
+  - output validation allowing omitted input candidates and `grade: "ignore"` candidates when echoed evidence matches;
   - contract address extraction and ticker/contract pairing;
   - no regression to existing digest CLI behavior.
 
@@ -270,6 +292,7 @@ GPT-5 Codex
 - Preserved digest flows as independent from grading output.
 - Documented grading command, model preference, and `SIGNAL_PAIRING_MAX_DISTANCE`.
 - Addressed gpt-5.4 review findings: enforced Codex-only provider for grading, removed stale window output before each Codex run, rejected empty runner output, tightened input/output schema validation, added previous-window labels, and prevented ambiguous one-ticker/two-contract alias pairing.
+- Documented schema `1.1` grading contract decisions: exact evidence echo, extras rejected, omissions allowed, layered validation, and legacy `1.0` distinction.
 
 ### File List
 
@@ -289,3 +312,4 @@ GPT-5 Codex
 
 - 2026-07-10: Implemented Codex CLI signal grading pipeline story and moved status to review.
 - 2026-07-16: Marked story done after review and full-suite validation passed.
+- 2026-07-16: Documented schema `1.1` source-of-evidence/source-of-judgment contract decisions.

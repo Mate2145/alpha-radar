@@ -11,9 +11,15 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.db.models import EntityType, Message
 from app.processing.extract_entities import EVM_CONTRACT_RE, TICKER_RE
+from app.processing.signal_memory import (
+    SignalMemory,
+    build_signal_memory_for_window,
+    normalize_contract,
+    normalize_ticker,
+)
 from app.summarization.llm_client import LLMClient
 
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "1.1"
 GRADING_TASK = "grade_crypto_signals"
 RAW_MESSAGE_LIMIT = 80
 SIGNAL_LIMIT = 30
@@ -23,6 +29,19 @@ ALLOWED_CHAINS = {"evm", "solana", "unknown"}
 ALLOWED_GRADES = {"A", "B", "C", "D", "ignore"}
 ALLOWED_PRIORITIES = {"high", "medium", "low", "ignore"}
 ALLOWED_ACTIONS = {"review", "watch", "ignore"}
+ECHOED_EVIDENCE_FIELDS = (
+    "signal_type",
+    "signal_key",
+    "aliases",
+    "chain",
+    "labels",
+    "first_seen",
+    "latest_seen",
+    "mention_count",
+    "source_count",
+    "vip_source_count",
+    "source_message_ids",
+)
 
 
 class GradingValidationError(RuntimeError):
@@ -92,6 +111,7 @@ def run_signal_grading(
     try:
         output_payload = json.loads(output_path.read_text(encoding="utf-8"))
         validate_grading_output(output_payload)
+        validate_grading_output_against_input(output_payload, payload)
     except (json.JSONDecodeError, GradingValidationError) as exc:
         shutil.copyfile(output_path, invalid_path)
         raise GradingValidationError(f"Invalid grading output: {exc}") from exc
@@ -112,6 +132,7 @@ def build_grading_input(
     pairing_max_distance: int,
 ) -> dict[str, Any]:
     messages = load_grading_messages(session, window_start, window_end)
+    memories = build_signal_memory_for_window(session, window_start, window_end)
     previous_counts = load_previous_window_counts(
         session,
         window_start,
@@ -125,12 +146,18 @@ def build_grading_input(
             "start": window_start.isoformat(),
             "end": window_end.isoformat(),
         },
+        "provenance": {
+            "candidate_builder": "signal_grading.v1",
+            "memory_source": "derived_from_messages_and_extracted_entities",
+            "generated_at": datetime.utcnow().isoformat(),
+        },
         "signals": build_signal_candidates(
             messages,
             window_start=window_start,
             window_end=window_end,
             pairing_max_distance=pairing_max_distance,
             previous_counts=previous_counts,
+            memories=memories,
         ),
         "raw_messages": [raw_message_payload(message) for message in messages[:RAW_MESSAGE_LIMIT]],
     }
@@ -161,9 +188,14 @@ def build_signal_candidates(
     window_end: datetime,
     pairing_max_distance: int,
     previous_counts: dict[tuple[str, str], int] | None = None,
+    memories: list[SignalMemory] | None = None,
 ) -> list[dict[str, Any]]:
     current: dict[tuple[str, str], dict[str, Any]] = {}
     previous_counts = previous_counts or {}
+    memory_by_key = {
+        (memory.signal_type, memory.signal_key): memory
+        for memory in memories or []
+    }
 
     for message in messages:
         for signal in signals_for_message(message, pairing_max_distance):
@@ -193,20 +225,27 @@ def build_signal_candidates(
 
     rendered = []
     for key, candidate in current.items():
-        labels = labels_for_candidate(candidate, previous_counts.get(key, 0), window_start)
+        memory = memory_by_key.get(key)
+        labels = labels_for_memory(memory, previous_counts.get(key, 0)) if memory else labels_for_candidate(
+            candidate,
+            previous_counts.get(key, 0),
+            window_start,
+        )
         rendered.append(
             {
                 "signal_type": candidate["signal_type"],
                 "signal_key": candidate["signal_key"],
-                "aliases": sorted(candidate["aliases"]),
-                "chain": candidate["chain"],
+                "aliases": sorted(candidate["aliases"] | set(memory.aliases if memory else ())),
+                "chain": memory.chain if memory else candidate["chain"],
                 "labels": labels,
-                "first_seen": candidate["first_seen"].isoformat(),
-                "latest_seen": candidate["latest_seen"].isoformat(),
-                "mention_count": candidate["mention_count"],
-                "source_count": len(candidate["source_ids"]),
+                "first_seen": (memory.first_seen if memory else candidate["first_seen"]).isoformat(),
+                "latest_seen": (memory.latest_seen if memory else candidate["latest_seen"]).isoformat(),
+                "mention_count": memory.mention_count if memory else candidate["mention_count"],
+                "source_count": memory.source_count if memory else len(candidate["source_ids"]),
                 "vip_source_count": 0,
-                "source_message_ids": candidate["source_message_ids"],
+                "source_message_ids": list(memory.source_message_ids)
+                if memory
+                else candidate["source_message_ids"],
             }
         )
     rendered.sort(key=lambda item: (-item["mention_count"], item["signal_key"]))
@@ -249,7 +288,7 @@ def signals_for_message(message: Message, pairing_max_distance: int) -> list[dic
         signals.append(
             {
                 "signal_type": "contract_address",
-                "signal_key": contract["value"],
+                "signal_key": normalize_contract(contract["value"]),
                 "aliases": aliases,
                 "chain": contract["chain"],
             }
@@ -261,7 +300,7 @@ def signals_for_message(message: Message, pairing_max_distance: int) -> list[dic
         signals.append(
             {
                 "signal_type": "ticker",
-                "signal_key": ticker["value"],
+                "signal_key": normalize_ticker(ticker["value"]),
                 "aliases": [],
                 "chain": "unknown",
             }
@@ -355,6 +394,15 @@ def labels_for_candidate(
     return labels
 
 
+def labels_for_memory(memory: SignalMemory, previous_count: int) -> list[str]:
+    labels = list(memory.labels)
+    if previous_count and memory.current_mention_count > previous_count:
+        labels.append("heating up")
+    if previous_count and memory.current_mention_count < previous_count:
+        labels.append("cooling down")
+    return labels
+
+
 def raw_message_payload(message: Message) -> dict[str, Any]:
     return {
         "id": db_message_id(message),
@@ -381,6 +429,7 @@ def validate_grading_input(payload: dict[str, Any]) -> None:
     require_equal(payload.get("schema_version"), SCHEMA_VERSION, "schema_version")
     require_equal(payload.get("task"), GRADING_TASK, "task")
     validate_window(payload.get("window"))
+    validate_provenance(payload.get("provenance"))
     for index, signal in enumerate(require_list(payload.get("signals"), "signals")):
         validate_input_signal(signal, index)
     for index, message in enumerate(require_list(payload.get("raw_messages"), "raw_messages")):
@@ -396,12 +445,57 @@ def validate_grading_output(payload: dict[str, Any]) -> None:
         validate_grade(grade, index)
 
 
+def validate_grading_output_against_input(
+    output_payload: dict[str, Any],
+    input_payload: dict[str, Any],
+) -> None:
+    validate_grading_output(output_payload)
+    validate_grading_input(input_payload)
+    require_equal(
+        output_payload["window"]["start"],
+        input_payload["window"]["start"],
+        "window.start",
+    )
+    require_equal(
+        output_payload["window"]["end"],
+        input_payload["window"]["end"],
+        "window.end",
+    )
+
+    input_signals = {
+        signal_identity(signal): signal
+        for signal in input_payload["signals"]
+    }
+    for index, grade in enumerate(output_payload["grades"]):
+        identity = signal_identity(grade)
+        input_signal = input_signals.get(identity)
+        if input_signal is None:
+            raise GradingValidationError(
+                f"grades[{index}] does not match an input signal: {identity[0]} {identity[1]}"
+            )
+        for field in ECHOED_EVIDENCE_FIELDS:
+            if grade.get(field) != input_signal.get(field):
+                raise GradingValidationError(
+                    f"grades[{index}].{field} must exactly match input signal evidence"
+                )
+
+
+def signal_identity(signal: dict[str, Any]) -> tuple[str, str]:
+    return (signal["signal_type"], signal["signal_key"])
+
+
 def validate_grade(grade: Any, index: int) -> None:
     require_object(grade, f"grades[{index}]")
     require_allowed(grade.get("signal_type"), ALLOWED_SIGNAL_TYPES, f"grades[{index}].signal_type")
     require_string(grade.get("signal_key"), f"grades[{index}].signal_key")
     require_string_list(grade.get("aliases"), f"grades[{index}].aliases")
     require_allowed(grade.get("chain"), ALLOWED_CHAINS, f"grades[{index}].chain")
+    require_string_list(grade.get("labels"), f"grades[{index}].labels")
+    require_string(grade.get("first_seen"), f"grades[{index}].first_seen")
+    require_string(grade.get("latest_seen"), f"grades[{index}].latest_seen")
+    require_int(grade.get("mention_count"), f"grades[{index}].mention_count")
+    require_int(grade.get("source_count"), f"grades[{index}].source_count")
+    require_int(grade.get("vip_source_count"), f"grades[{index}].vip_source_count")
     require_string_list(grade.get("source_message_ids"), f"grades[{index}].source_message_ids")
     require_allowed(grade.get("grade"), ALLOWED_GRADES, f"grades[{index}].grade")
     confidence = grade.get("confidence")
@@ -435,6 +529,13 @@ def validate_input_signal(signal: Any, index: int) -> None:
     require_int(signal.get("source_count"), f"signals[{index}].source_count")
     require_int(signal.get("vip_source_count"), f"signals[{index}].vip_source_count")
     require_string_list(signal.get("source_message_ids"), f"signals[{index}].source_message_ids")
+
+
+def validate_provenance(provenance: Any) -> None:
+    require_object(provenance, "provenance")
+    require_string(provenance.get("candidate_builder"), "provenance.candidate_builder")
+    require_string(provenance.get("memory_source"), "provenance.memory_source")
+    require_string(provenance.get("generated_at"), "provenance.generated_at")
 
 
 def validate_raw_message(message: Any, index: int) -> None:
@@ -511,8 +612,14 @@ def default_codex_runner(system_prompt: str, user_prompt: str) -> str:
 
 def grading_system_prompt() -> str:
     return (
-        "You grade crypto alpha signals. Read the provided input JSON file and write only "
-        "valid JSON matching the requested schema to the exact output file path."
+        "You grade market alpha signals from noisy crypto, token, equity, macro, and "
+        "related source messages. Do not ignore a ticker only because it looks like an "
+        "equity or non-crypto symbol; grade it by catalyst quality, relevance, source "
+        "support, and actionability in the provided evidence. Read the provided input "
+        "JSON file as the frozen source-of-evidence. Write only valid JSON matching the "
+        "requested schema to the exact output file path, and echo each graded signal's "
+        "labels, memory fields, and source_message_ids from the input so the output is "
+        "the source-of-judgment for later digest rendering."
     )
 
 
