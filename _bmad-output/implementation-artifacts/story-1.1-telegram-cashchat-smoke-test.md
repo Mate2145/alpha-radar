@@ -41,8 +41,8 @@ so that I can verify the system can recover the known Robinhood-related `$cashch
 ## Dev Notes
 
 - Keep the implementation inside current boundaries: `app/ingest`, `app/processing`, `app/cli.py`, and tests under `tests/`.
-- The current Telegram ingestion module is a stub: [app/ingest/telegram_ingest.py](/mnt/h/Dev/alpha-radar/app/ingest/telegram_ingest.py).
-- Existing entity extraction already recognizes `$TICKER`-style values: [app/processing/extract_entities.py](/mnt/h/Dev/alpha-radar/app/processing/extract_entities.py).
+- The current Telegram ingestion module is a stub: [app/ingest/telegram_ingest.py](app/ingest/telegram_ingest.py).
+- Existing entity extraction already recognizes `$TICKER`-style values: [app/processing/extract_entities.py](app/processing/extract_entities.py).
 - Do not introduce queues, schedulers, background workers, a UI, or orchestration services for this story.
 - Live Telegram integration details need one explicit implementation choice before coding: Bot API, Telethon user session, or another approved library.
 
@@ -54,10 +54,10 @@ so that I can verify the system can recover the known Robinhood-related `$cashch
 
 ### References
 
-- [AGENTS.md](/mnt/h/Dev/alpha-radar/AGENTS.md)
-- [epics.md](/mnt/h/Dev/alpha-radar/_bmad-output/planning-artifacts/epics.md)
-- [telegram_ingest.py](/mnt/h/Dev/alpha-radar/app/ingest/telegram_ingest.py)
-- [extract_entities.py](/mnt/h/Dev/alpha-radar/app/processing/extract_entities.py)
+- [AGENTS.md](AGENTS.md)
+- [epics.md](_bmad-output/planning-artifacts/epics.md)
+- [telegram_ingest.py](app/ingest/telegram_ingest.py)
+- [extract_entities.py](app/processing/extract_entities.py)
 
 ## Dev Agent Record
 

@@ -41,7 +41,7 @@ so that the final Telegram summary is AI-written without requiring OpenAI API bi
 
 ## Dev Notes
 
-- Existing Codex CLI adapter lives in [app/summarization/llm_client.py](/mnt/h/Dev/alpha-radar/app/summarization/llm_client.py).
+- Existing Codex CLI adapter lives in [app/summarization/llm_client.py](app/summarization/llm_client.py).
 - Existing digest build command already stores `DailySummary` rows.
 - Existing send command reads `DailySummary.content`, so Codex summaries should flow to Telegram without delivery changes.
 - Official Codex CLI auth path is `codex login`; `codex exec` reuses saved CLI authentication.
@@ -54,10 +54,10 @@ so that the final Telegram summary is AI-written without requiring OpenAI API bi
 
 ### References
 
-- [epics.md](/mnt/h/Dev/alpha-radar/_bmad-output/planning-artifacts/epics.md)
-- [llm_client.py](/mnt/h/Dev/alpha-radar/app/summarization/llm_client.py)
-- [digest_builder.py](/mnt/h/Dev/alpha-radar/app/summarization/digest_builder.py)
-- [cli.py](/mnt/h/Dev/alpha-radar/app/cli.py)
+- [epics.md](_bmad-output/planning-artifacts/epics.md)
+- [llm_client.py](app/summarization/llm_client.py)
+- [digest_builder.py](app/summarization/digest_builder.py)
+- [cli.py](app/cli.py)
 
 ## Dev Agent Record
 

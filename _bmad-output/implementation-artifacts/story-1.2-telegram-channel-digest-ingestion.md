@@ -39,7 +39,7 @@ so that the final daily summary sent to my own Telegram channel includes Telegra
 
 ## Dev Notes
 
-- Current Telegram smoke code lives in [app/ingest/telegram_ingest.py](/mnt/h/Dev/alpha-radar/app/ingest/telegram_ingest.py).
+- Current Telegram smoke code lives in [app/ingest/telegram_ingest.py](app/ingest/telegram_ingest.py).
 - `ingest_telegram(session)` is still the normal pipeline stub and should become the implementation entry point.
 - Existing digest loading uses `Message.created_at.date() == summary_date`, so Telegram message timestamps must be normalized consistently.
 - Existing content hash dedupe is global by normalized content, not per source.
@@ -52,11 +52,11 @@ so that the final daily summary sent to my own Telegram channel includes Telegra
 
 ### References
 
-- [epics.md](/mnt/h/Dev/alpha-radar/_bmad-output/planning-artifacts/epics.md)
-- [story-1.1-telegram-cashchat-smoke-test.md](/mnt/h/Dev/alpha-radar/_bmad-output/implementation-artifacts/story-1.1-telegram-cashchat-smoke-test.md)
-- [telegram_ingest.py](/mnt/h/Dev/alpha-radar/app/ingest/telegram_ingest.py)
-- [digest_builder.py](/mnt/h/Dev/alpha-radar/app/summarization/digest_builder.py)
-- [models.py](/mnt/h/Dev/alpha-radar/app/db/models.py)
+- [epics.md](_bmad-output/planning-artifacts/epics.md)
+- [story-1.1-telegram-cashchat-smoke-test.md](_bmad-output/implementation-artifacts/story-1.1-telegram-cashchat-smoke-test.md)
+- [telegram_ingest.py](app/ingest/telegram_ingest.py)
+- [digest_builder.py](app/summarization/digest_builder.py)
+- [models.py](app/db/models.py)
 
 ## Dev Agent Record
 

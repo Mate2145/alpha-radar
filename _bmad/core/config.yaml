@@ -3,7 +3,11 @@
 # Version: 6.10.0
 # Date: 2026-07-08T12:29:00.545Z
 
+<<<<<<< HEAD
 user_name: Matter
+=======
+user_name: Operator
+>>>>>>> 6371196448af14f5c2b0e5538ee5c62ed5b92328
 project_name: alpha-radar
 communication_language: English
 document_output_language: English

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cd /mnt/h/Dev/alpha-radar
+cd "$(dirname "$0")/.."
 
 # Load venv
 source .venv/bin/activate

@@ -5,6 +5,11 @@ __pycache__/
 *.pyc
 data/*.db
 data/*.db-*
+data/*.session
+data/*.session-*
+data/digest-*.md
+data/window-digest-*.md
+data/signal-grading/
 dist/
 build/
 *.egg-info/
@@ -13,5 +18,4 @@ build/
 .codex
 .opencode
 .coverage
-
 

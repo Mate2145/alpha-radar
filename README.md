@@ -42,6 +42,7 @@ python -m app.main init-db
 - `CODEX_COMMAND`: Codex CLI command, defaults to `codex`.
 - `CODEX_MODEL`: optional Codex model override.
 - `CODEX_TIMEOUT_SECONDS`: timeout for `codex exec`.
+- `SIGNAL_PAIRING_MAX_DISTANCE`: max character distance for pairing a ticker with a contract address in signal grading, defaults to `120`.
 - `TELEGRAM_API_ID`: Telegram API ID for history reads via Telethon.
 - `TELEGRAM_API_HASH`: Telegram API hash for history reads via Telethon.
 - `TELEGRAM_SESSION_NAME`: local Telethon session path/name.
@@ -73,7 +74,7 @@ Then set:
 
 ```env
 LLM_PROVIDER=codex_cli
-CODEX_MODEL=
+CODEX_MODEL=gpt-5.4-mini
 ```
 
 `codex_cli` shells out to `codex exec --ephemeral`, passes the digest source messages on stdin, and stores the final stdout as the daily summary. It is best for local runs, not unattended production scheduling.
@@ -113,9 +114,12 @@ alpha init-db
 alpha ingest-rss
 alpha ingest-all
 alpha check-llm
+alpha grade-signals --since-hours 6
 alpha build-digest --date 2026-07-08
 alpha build-window-digest --since-hours 6
 alpha build-window-digest --from 2026-07-08T06:00:00 --to 2026-07-08T12:00:00
+alpha grade-signals --since-hours 6
+alpha grade-signals --from 2026-07-08T06:00:00 --to 2026-07-08T12:00:00
 alpha export-digest --date 2026-07-08
 alpha send-digest --date 2026-07-08
 alpha send-digest --date 2026-07-08 --discord-only
@@ -133,6 +137,8 @@ python -m app.main check-llm
 python -m app.main build-digest --date 2026-07-08
 python -m app.main build-window-digest --since-hours 6
 python -m app.main build-window-digest --from 2026-07-08T06:00:00 --to 2026-07-08T12:00:00
+python -m app.main grade-signals --since-hours 6
+python -m app.main grade-signals --from 2026-07-08T06:00:00 --to 2026-07-08T12:00:00
 python -m app.main export-digest --date 2026-07-08
 python -m app.main export-window-digest
 python -m app.main send-digest --date 2026-07-08
@@ -167,6 +173,34 @@ To always build, export, and broadcast the latest rolling 6-hour digest to Teleg
 ```bash
 scripts/run_6h_broadcast_digest.sh
 ```
+
+To run the same rolling 6-hour schedule with signal grading before digest generation:
+
+```bash
+scripts/run_6h_signal_grading_broadcast.sh
+```
+
+This writes the schedule log under `data/signal-grading/schedule-logs/` and the grading debug log under `data/signal-grading/logs/`.
+
+## Signal Grading
+
+`alpha grade-signals` prepares a structured JSON payload for the selected window, asks Codex CLI to write grading JSON, validates the output, and keeps audit files on disk. It is separate from digest generation, so invalid grading output does not block `build-digest` or `build-window-digest`.
+
+```bash
+alpha ingest-all
+alpha grade-signals --since-hours 6
+```
+
+Files are written under:
+
+```text
+data/signal-grading/
+  input/latest.json
+  output/latest.json
+  invalid/
+```
+
+Window-specific files use `YYYYMMDDTHHMMSS-YYYYMMDDTHHMMSS.json`. If Codex writes invalid JSON, the command fails, preserves the previous valid `output/latest.json`, and saves the invalid file under `data/signal-grading/invalid/`.
 
 ## Docker Compose
 

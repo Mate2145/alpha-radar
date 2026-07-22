@@ -74,6 +74,12 @@ CRYPTO_KEYWORDS = {
 
 URL_RE = re.compile(r"https?://[^\s<>)\"']+")
 TICKER_RE = re.compile(r"(?<!\w)\$([A-Z][A-Z0-9]{1,9})(?!\w)")
+EVM_CONTRACT_RE = re.compile(r"(?<![A-Za-z0-9])0x[0-9a-fA-F]{40}(?![A-Za-z0-9])")
+SOLANA_CONTRACT_RE = re.compile(r"(?<![1-9A-HJ-NP-Za-km-z])[1-9A-HJ-NP-Za-km-z]{32,44}(?![1-9A-HJ-NP-Za-km-z])")
+SOLANA_CONTRACT_CONTEXT_RE = re.compile(
+    r"\b(?:ca|contract|address|addr|mint|token)\b",
+    re.IGNORECASE,
+)
 
 
 def extract_urls(content: str) -> list[str]:
@@ -82,6 +88,22 @@ def extract_urls(content: str) -> list[str]:
 
 def extract_tickers(content: str) -> list[str]:
     return sorted({f"${match}" for match in TICKER_RE.findall(content)})
+
+
+def extract_contract_addresses(content: str) -> list[str]:
+    evm_addresses = {match.group(0).lower() for match in EVM_CONTRACT_RE.finditer(content)}
+    solana_addresses = {
+        match.group(0)
+        for match in SOLANA_CONTRACT_RE.finditer(content)
+        if not match.group(0).startswith("0x") and has_solana_contract_context(content, match)
+    }
+    return sorted(evm_addresses | solana_addresses)
+
+
+def has_solana_contract_context(content: str, match: re.Match[str]) -> bool:
+    start = max(0, match.start() - 30)
+    end = min(len(content), match.end() + 30)
+    return SOLANA_CONTRACT_CONTEXT_RE.search(content[start:end]) is not None
 
 
 def extract_keywords(content: str) -> list[str]:
@@ -95,6 +117,10 @@ def extract_entities(content: str) -> list[tuple[str, str]]:
     entities: list[tuple[str, str]] = []
     entities.extend(("url", url) for url in extract_urls(content))
     entities.extend(("ticker", ticker) for ticker in extract_tickers(content))
+    entities.extend(
+        ("contract_address", contract_address)
+        for contract_address in extract_contract_addresses(content)
+    )
     entities.extend(("keyword", keyword) for keyword in extract_keywords(content))
     return entities
 

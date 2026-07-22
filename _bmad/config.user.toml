@@ -10,7 +10,7 @@
 # ─────────────────────────────────────────────────────────────────
 
 [core]
-user_name = "Matter"
+user_name = "Operator"
 communication_language = "English"
 
 [modules.bmm]

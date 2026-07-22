@@ -18,6 +18,7 @@ from app.ingest.discord_ingest import ingest_discord
 from app.ingest.rss_ingest import ingest_rss
 from app.ingest.telegram_ingest import ingest_telegram, run_telegram_signal_smoke_test
 from app.processing.score_messages import apply_cross_source_bonus, apply_cross_source_bonus_for_window
+from app.processing.signal_grading import GradingValidationError, run_signal_grading
 from app.summarization.digest_builder import build_digest, build_window_digest
 from app.summarization.llm_client import LLMClient
 from app.utils.logging import configure_logging, get_logger
@@ -255,6 +256,47 @@ def build_window_digest_command(
     )
 
 
+@app.command("grade-signals")
+def grade_signals_command(
+    since_hours: int | None = typer.Option(
+        None, "--since-hours", help="Grade signals from the last N hours."
+    ),
+    window_start_value: str | None = typer.Option(
+        None, "--from", help="Window start as ISO datetime, e.g. 2026-07-08T06:00:00."
+    ),
+    window_end_value: str | None = typer.Option(
+        None, "--to", help="Window end as ISO datetime, e.g. 2026-07-08T12:00:00."
+    ),
+) -> None:
+    window_start, window_end = resolve_digest_window(
+        since_hours,
+        window_start_value,
+        window_end_value,
+    )
+    settings = get_settings()
+    init_db()
+    logger.info("Grading signals from %s to %s", window_start.isoformat(), window_end.isoformat())
+    with SessionLocal() as session:
+        try:
+            result = run_signal_grading(
+                session,
+                window_start,
+                window_end,
+                pairing_max_distance=settings.signal_pairing_max_distance,
+            )
+        except (GradingValidationError, RuntimeError) as exc:
+            logger.error("Failed to grade signals: %s", exc)
+            raise typer.BadParameter(str(exc)) from exc
+    typer.echo(
+        "Graded signals "
+        f"{window_start.isoformat()} to {window_end.isoformat()}.\n"
+        f"Input: {result.input_path}\n"
+        f"Output: {result.output_path}\n"
+        f"Latest: {result.latest_output_path}"
+    )
+    logger.info("Signal grading complete: %s", result.output_path)
+
+
 @app.command("send-digest")
 def send_digest_command(
     summary_date_value: str = typer.Option(
@@ -433,3 +475,7 @@ def smoke_telegram_signal_command(
         preview = " ".join(match.content.split())[:220]
         url = f" {match.url}" if match.url else ""
         typer.echo(f"- [{match.channel}] {match.created_at.isoformat()}: {preview}{url}")
+
+
+if __name__ == "__main__":
+    app()
